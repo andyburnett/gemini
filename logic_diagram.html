@@ -15,28 +15,24 @@
         h1 {
             color: #333;
         }
-        .mermaid {
+        .mermaid-container { /* Use a specific container class for Mermaid */
             margin-top: 20px;
             border: 1px solid #ccc;
             padding: 20px;
             text-align: center;
+            width: 80%; /* Give it some width for better visibility */
         }
+        /* Make .hidden/.visible apply to the actual container and SVG nodes
+           (the diagram is inside `.mermaid-container`, not `.mermaid`).
+           Also include a global `.hidden` rule to cover any SVG elements
+           that receive the class via JS. */
+        .mermaid-container .hidden,
         .hidden {
-            opacity: 0;
-            transition: opacity 0.5s ease-in;
+            visibility: hidden !important;
         }
+        .mermaid-container .visible,
         .visible {
-            opacity: 1;
-        }
-        .edge-hidden path {
-            /* Initially hide the edge line */
-            stroke-dashoffset: 1000;
-            stroke-dasharray: 1000;
-        }
-        .edge-visible path {
-            transition: stroke-dashoffset 1s ease-in;
-            stroke-dashoffset: 0;
-            stroke-dasharray: none;
+            visibility: visible !important;
         }
         button {
             margin-top: 20px;
@@ -53,9 +49,9 @@
 
     <h1>Logic Diagram</h1>
 
-    <div class="mermaid" id="mermaid-diagram">
+    <div class="mermaid-container" id="mermaid-target">
         graph TD
-            A[You are here] --> B{Choose a path}
+            A[You are here - updated] --> B{Choose a path}
             B --> C[Go to Oberlin]
             B --> D[Go somewhere else]
             C --> E{Decision at Oberlin}
@@ -64,152 +60,249 @@
     </div>
 
     <button id="reset-btn">Reset Diagram</button>
+    <div id="debug-panel" style="margin-top:16px; width:80%; max-width:900px; font-family:monospace; font-size:12px; white-space:pre-wrap; background:#f7f7f7; padding:8px; border:1px solid #eee; display:none"></div>
 
     <!-- Mermaid.js for diagrams from markdown-like text -->
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 
     <script>
-        // Initialize Mermaid.js
-        mermaid.initialize({ startOnLoad: true });
+        // Map node IDs to their children
+        const nodeChildren = {
+            'A': ['B'],
+            'B': ['C', 'D'],
+            'C': ['E'],
+            'D': [],
+            'E': ['F', 'G'],
+            'F': [],
+            'G': []
+        };
 
-        // Wait for Mermaid to render the SVG
-        const observer = new MutationObserver(() => {
-            if (document.querySelector('#mermaid-diagram svg')) {
-                observer.disconnect();
-                setupInteractivity();
-            }
+        mermaid.initialize({ startOnLoad: false }); // Explicit control
+
+        const mermaidContainer = document.getElementById('mermaid-target');
+        const diagramDefinition = mermaidContainer.textContent.trim(); // Get the diagram definition from the div
+
+        // Render the full diagram once, then control visibility by toggling
+        // SVG elements in-place. This avoids brittle re-parsing across
+        // Mermaid versions.
+        mermaid.render('mermaid-rendered-svg-id', diagramDefinition).then(({ svg }) => {
+            mermaidContainer.innerHTML = svg; // Place the rendered SVG into the container
+            setupInteractivity();
+            dumpDebugInfo();
+        }).catch(error => {
+            console.error("Mermaid rendering failed:", error);
         });
-        observer.observe(document.getElementById('mermaid-diagram'), { childList: true });
 
         function setupInteractivity() {
-            const svg = document.querySelector('#mermaid-diagram svg');
-            if (!svg) {
-                return;
-            }
+            const svg = document.querySelector('#mermaid-target svg');
 
-            // Get the marker-end from a sample path
-            const samplePath = document.querySelector('path[id*="L-"]');
-            let markerEnd = '';
-            if (samplePath) {
-                markerEnd = samplePath.getAttribute('marker-end') || '';
-            }
+            // 1. Hide all nodes and edges initially
+            svg.querySelectorAll('g.node').forEach(node => node.classList.add('hidden'));
+            svg.querySelectorAll('.edgePaths, .edgePath, g.edge, path').forEach(edgeGroup => {
+                try { edgeGroup.style.display = 'none'; edgeGroup.classList.remove('hidden'); } catch (e) {}
+            });
 
-            // Hide sub-nodes and edges initially
-            hideElement('C');
-            hideElement('D');
-            hideElement('E');
-            hideElement('F');
-            hideElement('G');
-            // Ensure edges are hidden using the class
-            const edgesToHide = [
-                { from: 'B', to: 'C' },
-                { from: 'B', to: 'D' },
-                { from: 'C', to: 'E' },
-                { from: 'E', to: 'F' },
-                { from: 'E', to: 'G' }
+            // 2. Show initial nodes ('A' and 'B') and the connecting edge ('A' -> 'B')
+            const nodeA = findNodeElement('A');
+            const nodeB = findNodeElement('B');
+            const edgeAB = findEdgeElement('A', 'B');
+
+            if (nodeA) nodeA.classList.remove('hidden');
+            if (nodeB) nodeB.classList.remove('hidden');
+            if (edgeAB) showEdge(edgeAB);
+
+            // Add click handlers that toggle children visibility in-place
+            Object.keys(nodeChildren).forEach(nodeId => {
+                const nodeElement = findNodeElement(nodeId);
+                if (nodeElement) {
+                    nodeElement.addEventListener('click', () => toggleChildrenVisibility(nodeId));
+                }
+            });
+
+            document.getElementById('reset-btn').addEventListener('click', resetDiagram);
+        }
+
+        function findNodeElement(id) {
+            // Mermaid typically creates a group <g class="node"> with an ID like 'flowchart-ID-...'
+            return document.querySelector(`#mermaid-target svg g.node[id*='flowchart-${id}-']`) || document.querySelector(`#mermaid-target svg #${id}`);
+        }
+
+        function findEdgeElement(from, to) {
+            const svg = document.querySelector('#mermaid-target svg');
+            // Try several strategies to find the edge container or path elements.
+            // 1) A container with class 'edgePaths' or 'edgePath' and an id that includes the from-to
+            const selectors = [
+                `.edgePaths[id*='flowchart-${from}-${to}-']`,
+                `.edgePath[id*='flowchart-${from}-${to}-']`,
+                `g.edge[id*='${from}'][id*='${to}']`,
+                `path[id*='flowchart-${from}-${to}-']`,
+                `path[id*='${from}-${to}']`
             ];
-            edgesToHide.forEach(edge => {
-                const el = findEdge(edge.from, edge.to);
-                if (el) {
-                    const path = el.tagName === 'PATH' ? el : el.querySelector('path');
-                    if (path) {
-                        path.classList.add('edge-hidden');
-                        path.style.markerEnd = 'none';
+
+            for (const sel of selectors) {
+                const el = svg.querySelector(sel);
+                if (el) return el;
+            }
+
+            // As a last resort, try to find any path that visually connects nodes by looking for
+            // path elements that have marker-end (arrowheads) and are near the nodes. This is
+            // a broad fallback and may return null in complex diagrams.
+            const allPaths = Array.from(svg.querySelectorAll('path'));
+            for (const p of allPaths) {
+                const id = p.getAttribute('id') || '';
+                if (id.includes(from) && id.includes(to)) return p;
+            }
+
+            return null;
+        }
+
+        // Helper: is the element currently visible (not display:none, not visibility:hidden, and not .hidden)
+        function isElementVisible(el) {
+            if (!el) return false;
+            try {
+                const cs = getComputedStyle(el);
+                if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+            } catch (e) {}
+            if (el.classList && el.classList.contains('hidden')) return false;
+            return true;
+        }
+
+        function showEdge(edge) {
+            if (!edge) return;
+            try {
+                edge.style.display = '';
+                edge.classList.remove('hidden');
+                if (edge.tagName && edge.tagName.toLowerCase() === 'path' && edge.parentElement) {
+                    edge.parentElement.style.display = '';
+                    edge.parentElement.classList.remove('hidden');
+                }
+            } catch (e) {}
+        }
+
+        function hideEdge(edge) {
+            if (!edge) return;
+            try {
+                edge.style.display = 'none';
+                edge.classList.remove('hidden');
+                if (edge.tagName && edge.tagName.toLowerCase() === 'path' && edge.parentElement) {
+                    edge.parentElement.style.display = 'none';
+                }
+            } catch (e) {}
+        }
+
+        // Recursively hide a node's subtree (used when collapsing a branch)
+        function hideSubtree(parentId) {
+            const children = nodeChildren[parentId] || [];
+            children.forEach(childId => {
+                const childNode = findNodeElement(childId);
+                if (childNode) childNode.classList.add('hidden');
+                const edge = findEdgeElement(parentId, childId);
+                hideEdge(edge);
+                hideSubtree(childId);
+            });
+        }
+
+        // Ensure edges are visible whenever both their endpoints are visible
+        function updateAllEdgesVisibility() {
+            Object.keys(nodeChildren).forEach(parentId => {
+                nodeChildren[parentId].forEach(childId => {
+                    const parentNode = findNodeElement(parentId);
+                    const childNode = findNodeElement(childId);
+                    const edge = findEdgeElement(parentId, childId);
+                    if (isElementVisible(parentNode) && isElementVisible(childNode)) {
+                        showEdge(edge);
+                    } else {
+                        hideEdge(edge);
                     }
+                });
+            });
+            // Update debug panel after changing visibilities
+            dumpDebugInfo();
+        }
+
+        function dumpDebugInfo() {
+            const out = [];
+            const svg = document.querySelector('#mermaid-target svg');
+            out.push('SVG present: ' + (svg ? 'yes' : 'no'));
+            out.push('');
+            Object.keys(nodeChildren).forEach(parentId => {
+                const node = findNodeElement(parentId);
+                const nodeText = node ? (node.id || node.tagName) : 'MISSING';
+                const visible = node ? isElementVisible(node) : false;
+                const cs = node ? getComputedStyle(node) : {display:'-', visibility:'-'};
+                out.push(`NODE ${parentId}: element=${nodeText} display=${cs.display} visibility=${cs.visibility} visible=${visible}`);
+                nodeChildren[parentId].forEach(childId => {
+                    const child = findNodeElement(childId);
+                    const edge = findEdgeElement(parentId, childId);
+                    const edgeId = edge ? (edge.id || edge.tagName) : 'MISSING';
+                    const edgeDisp = edge && edge.style ? edge.style.display : '-';
+                    out.push(`  EDGE ${parentId}->${childId}: element=${edgeId} displayStyle=${edgeDisp} childExists=${!!child}`);
+                });
+            });
+
+            // list some path ids
+            if (svg) {
+                const paths = Array.from(svg.querySelectorAll('path')).slice(0,50).map(p=>p.id||p.getAttribute('class')||p.tagName);
+                out.push('');
+                out.push('Paths (first 50): ' + paths.join(', '));
+            }
+
+            const panel = document.getElementById('debug-panel');
+            if (panel) { panel.textContent = out.join('\n'); panel.style.display = 'block'; }
+        }
+
+        function toggleChildrenVisibility(parentId) {
+            const children = nodeChildren[parentId];
+            if (!children) return;
+            children.forEach(childId => {
+                const childNode = findNodeElement(childId);
+                const edge = findEdgeElement(parentId, childId);
+
+                if (!childNode) return;
+
+                const currentlyVisible = isElementVisible(childNode);
+                if (currentlyVisible) {
+                    // collapse: hide child and its subtree, hide connecting edge
+                    childNode.classList.add('hidden');
+                    hideEdge(edge);
+                    hideSubtree(childId);
+                } else {
+                    // expand: show child and show edge if parent is visible
+                    childNode.classList.remove('hidden');
+                    const parentNode = findNodeElement(parentId);
+                    if (isElementVisible(parentNode)) showEdge(edge);
                 }
-            });
 
-            // Add click handlers
-            addClickHandler('B', function() {
-                showElement('C');
-                showElement('D');
-                showEdge('B', 'C', markerEnd);
-                showEdge('B', 'D', markerEnd);
-            });
-
-            addClickHandler('C', function() {
-                showElement('E');
-                showEdge('C', 'E', markerEnd);
-            });
-
-            addClickHandler('E', function() {
-                showElement('F');
-                showElement('G');
-                showEdge('E', 'F', markerEnd);
-                showEdge('E', 'G', markerEnd);
-            });
-
-            // End nodes do nothing for now, but handlers are ready
-            addClickHandler('F', function() { /* Future action */ });
-            addClickHandler('G', function() { /* Future action */ });
-            addClickHandler('D', function() { /* Future action */ });
-
-            // Reset button
-            document.getElementById('reset-btn').addEventListener('click', function() {
-                hideElement('C');
-                hideElement('D');
-                hideElement('E');
-                hideElement('F');
-                hideElement('G');
-                // Use hideEdge function to reset edges
-                hideEdge('B', 'C', markerEnd);
-                hideEdge('B', 'D', markerEnd);
-                hideEdge('C', 'E', markerEnd);
-                hideEdge('E', 'F', markerEnd);
-                hideEdge('E', 'G', markerEnd);
+                // Keep global edge visibility consistent
+                updateAllEdgesVisibility();
             });
         }
 
-        function hideElement(id) {
-            const el = document.querySelector(`[id^="flowchart-${id}"]`);
-            if (el) {
-                el.classList.add('hidden');
-            }
-        }
+        function resetDiagram() {
+            const svg = document.querySelector('#mermaid-target svg');
 
-        function showElement(id) {
-            const el = document.querySelector(`[id^="flowchart-${id}"]`);
-            if (el) {
-                el.classList.remove('hidden');
-                el.classList.add('visible');
-            }
-        }
+            // Hide all nodes and edges
+            svg.querySelectorAll('g.node').forEach(node => node.classList.add('hidden'));
+            // Hide edges using inline styles for broader compatibility and remove any
+            // stray `.hidden` classes that could still affect visibility.
+            svg.querySelectorAll('.edgePaths, .edgePath, g.edge, path').forEach(edgeGroup => {
+                try { edgeGroup.style.display = 'none'; edgeGroup.classList.remove('hidden'); } catch (e) {}
+            });
 
-        function hideEdge(from, to, markerEnd) {
-            const el = findEdge(from, to);
-            if (el) {
-                const path = el.tagName === 'PATH' ? el : el.querySelector('path');
-                if (path) {
-                    path.classList.add('edge-hidden');
-                    path.classList.remove('edge-visible');
-                    path.style.markerEnd = 'none'; // Hide the marker
+            // Show initial nodes ('A' and 'B') and connecting edge ('A' -> 'B')
+            const nodeA = findNodeElement('A');
+            const nodeB = findNodeElement('B');
+            const edgeAB = findEdgeElement('A', 'B');
+
+            if (nodeA) nodeA.classList.remove('hidden');
+            if (nodeB) nodeB.classList.remove('hidden');
+            if (edgeAB) {
+                edgeAB.classList.remove('hidden');
+                try { edgeAB.style.display = ''; } catch (e) {}
+                if (edgeAB.tagName.toLowerCase() === 'path' && edgeAB.parentElement) {
+                    edgeAB.parentElement.classList.remove('hidden');
+                    try { edgeAB.parentElement.style.display = ''; } catch (e) {}
                 }
-            }
-        }
-
-        function showEdge(from, to, markerEnd) {
-            const el = findEdge(from, to);
-            if (el) {
-                const path = el.tagName === 'PATH' ? el : el.querySelector('path');
-                if (path) {
-                    path.classList.remove('edge-hidden');
-                    path.classList.add('edge-visible');
-                    if (markerEnd) {
-                        path.style.markerEnd = markerEnd; // Show the original marker
-                    }
-                }
-            }
-        }
-
-        function findEdge(from, to) {
-            // Find any element with id containing from and to
-            return document.querySelector(`[id*="${from}"][id*="${to}"]`);
-        }
-
-        function addClickHandler(id, callback) {
-            const el = document.querySelector(`[id^="flowchart-${id}"]`);
-            if (el) {
-                el.addEventListener('click', callback);
             }
         }
     </script>
