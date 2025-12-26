@@ -21,13 +21,36 @@
             padding: 20px;
             text-align: center;
         }
+        .hidden {
+            opacity: 0;
+            transition: opacity 0.5s ease-in;
+        }
+        .visible {
+            opacity: 1;
+        }
+        .edge-hidden path {
+            stroke-dashoffset: 1000;
+            transition: stroke-dashoffset 1s ease-in;
+        }
+        .edge-visible path {
+            stroke-dashoffset: 0;
+        }
+        button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .node rect, .node circle, .node polygon {
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
 
     <h1>Logic Diagram</h1>
 
-    <div class="mermaid">
+    <div class="mermaid" id="mermaid-diagram">
         graph TD
             A[You are here] --> B{Choose a path}
             B --> C[Go to Oberlin]
@@ -37,12 +60,142 @@
             E --> G[Do not switch to ED2]
     </div>
 
+    <button id="reset-btn">Reset Diagram</button>
+
     <!-- Mermaid.js for diagrams from markdown-like text -->
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 
     <script>
         // Initialize Mermaid.js
         mermaid.initialize({ startOnLoad: true });
+
+        // Wait for Mermaid to render the SVG
+        const observer = new MutationObserver(() => {
+            if (document.querySelector('#mermaid-diagram svg')) {
+                observer.disconnect();
+                setupInteractivity();
+            }
+        });
+        observer.observe(document.getElementById('mermaid-diagram'), { childList: true });
+
+        function setupInteractivity() {
+            const svg = document.querySelector('#mermaid-diagram svg');
+            if (!svg) {
+                return;
+            }
+
+            // Get the marker-end from a sample path
+            const samplePath = document.querySelector('path[id*="L-"]');
+            let markerEnd = '';
+            if (samplePath) {
+                markerEnd = samplePath.getAttribute('marker-end') || '';
+            }
+
+            // Hide sub-nodes and edges initially
+            hideElement('C');
+            hideElement('D');
+            hideElement('E');
+            hideElement('F');
+            hideElement('G');
+            hideEdge('B', 'C', markerEnd);
+            hideEdge('B', 'D', markerEnd);
+            hideEdge('C', 'E', markerEnd);
+            hideEdge('E', 'F', markerEnd);
+            hideEdge('E', 'G', markerEnd);
+
+            // Add click handlers
+            addClickHandler('B', function() {
+                showElement('C');
+                showElement('D');
+                showEdge('B', 'C', markerEnd);
+                showEdge('B', 'D', markerEnd);
+            });
+
+            addClickHandler('C', function() {
+                showElement('E');
+                showEdge('C', 'E', markerEnd);
+            });
+
+            addClickHandler('E', function() {
+                showElement('F');
+                showElement('G');
+                showEdge('E', 'F', markerEnd);
+                showEdge('E', 'G', markerEnd);
+            });
+
+            // End nodes do nothing for now, but handlers are ready
+            addClickHandler('F', function() { /* Future action */ });
+            addClickHandler('G', function() { /* Future action */ });
+            addClickHandler('D', function() { /* Future action */ });
+
+            // Reset button
+            document.getElementById('reset-btn').addEventListener('click', function() {
+                hideElement('C');
+                hideElement('D');
+                hideElement('E');
+                hideElement('F');
+                hideElement('G');
+                hideEdge('B', 'C', markerEnd);
+                hideEdge('B', 'D', markerEnd);
+                hideEdge('C', 'E', markerEnd);
+                hideEdge('E', 'F', markerEnd);
+                hideEdge('E', 'G', markerEnd);
+            });
+        }
+
+        function hideElement(id) {
+            const el = document.querySelector(`[id^="flowchart-${id}"]`);
+            if (el) {
+                el.classList.add('hidden');
+            }
+        }
+
+        function showElement(id) {
+            const el = document.querySelector(`[id^="flowchart-${id}"]`);
+            if (el) {
+                el.classList.remove('hidden');
+                el.classList.add('visible');
+            }
+        }
+
+        function hideEdge(from, to, markerEnd) {
+            const el = findEdge(from, to);
+            if (el) {
+                const path = el.tagName === 'PATH' ? el : el.querySelector('path');
+                if (path) {
+                    const length = path.getTotalLength();
+                    path.style.display = 'block';
+                    path.style.strokeDasharray = length;
+                    path.style.strokeDashoffset = length;
+                    path.style.markerEnd = 'none';
+                }
+            }
+        }
+
+        function showEdge(from, to, markerEnd) {
+            const el = findEdge(from, to);
+            if (el) {
+                const path = el.tagName === 'PATH' ? el : el.querySelector('path');
+                if (path) {
+                    path.style.strokeDashoffset = '0';
+                    if (markerEnd) {
+                        path.style.markerEnd = markerEnd;
+                    }
+                }
+            }
+        }
+
+        function findEdge(from, to) {
+            // Find any element with id containing from and to
+            return document.querySelector(`[id*="${from}"][id*="${to}"]`);
+        }
+
+        function addClickHandler(id, callback) {
+            const el = document.querySelector(`[id^="flowchart-${id}"]`);
+            if (el) {
+                el.addEventListener('click', callback);
+            }
+        }
     </script>
 
 </body>
