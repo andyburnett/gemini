@@ -29,11 +29,14 @@
             opacity: 1;
         }
         .edge-hidden path {
+            /* Initially hide the edge line */
             stroke-dashoffset: 1000;
-            transition: stroke-dashoffset 1s ease-in;
+            stroke-dasharray: 1000;
         }
         .edge-visible path {
+            transition: stroke-dashoffset 1s ease-in;
             stroke-dashoffset: 0;
+            stroke-dasharray: none;
         }
         button {
             margin-top: 20px;
@@ -97,11 +100,24 @@
             hideElement('E');
             hideElement('F');
             hideElement('G');
-            hideEdge('B', 'C', markerEnd);
-            hideEdge('B', 'D', markerEnd);
-            hideEdge('C', 'E', markerEnd);
-            hideEdge('E', 'F', markerEnd);
-            hideEdge('E', 'G', markerEnd);
+            // Ensure edges are hidden using the class
+            const edgesToHide = [
+                { from: 'B', to: 'C' },
+                { from: 'B', to: 'D' },
+                { from: 'C', to: 'E' },
+                { from: 'E', to: 'F' },
+                { from: 'E', to: 'G' }
+            ];
+            edgesToHide.forEach(edge => {
+                const el = findEdge(edge.from, edge.to);
+                if (el) {
+                    const path = el.tagName === 'PATH' ? el : el.querySelector('path');
+                    if (path) {
+                        path.classList.add('edge-hidden');
+                        path.style.markerEnd = 'none';
+                    }
+                }
+            });
 
             // Add click handlers
             addClickHandler('B', function() {
@@ -135,6 +151,7 @@
                 hideElement('E');
                 hideElement('F');
                 hideElement('G');
+                // Use hideEdge function to reset edges
                 hideEdge('B', 'C', markerEnd);
                 hideEdge('B', 'D', markerEnd);
                 hideEdge('C', 'E', markerEnd);
@@ -163,11 +180,9 @@
             if (el) {
                 const path = el.tagName === 'PATH' ? el : el.querySelector('path');
                 if (path) {
-                    const length = path.getTotalLength();
-                    path.style.display = 'block';
-                    path.style.strokeDasharray = length;
-                    path.style.strokeDashoffset = length;
-                    path.style.markerEnd = 'none';
+                    path.classList.add('edge-hidden');
+                    path.classList.remove('edge-visible');
+                    path.style.markerEnd = 'none'; // Hide the marker
                 }
             }
         }
@@ -177,9 +192,10 @@
             if (el) {
                 const path = el.tagName === 'PATH' ? el : el.querySelector('path');
                 if (path) {
-                    path.style.strokeDashoffset = '0';
+                    path.classList.remove('edge-hidden');
+                    path.classList.add('edge-visible');
                     if (markerEnd) {
-                        path.style.markerEnd = markerEnd;
+                        path.style.markerEnd = markerEnd; // Show the original marker
                     }
                 }
             }
