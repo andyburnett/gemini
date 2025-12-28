@@ -96,20 +96,31 @@
         function setupInteractivity() {
             const svg = document.querySelector('#mermaid-target svg');
 
-            // 1. Hide all nodes and edges initially
+            // 1. Hide all nodes initially
             svg.querySelectorAll('g.node').forEach(node => node.classList.add('hidden'));
-            svg.querySelectorAll('.edgePaths, .edgePath, g.edge, path').forEach(edgeGroup => {
-                try { edgeGroup.style.display = 'none'; edgeGroup.classList.remove('hidden'); } catch (e) {}
+
+            // 2. Tag all edge paths with data attributes for easier tracking
+            // Mermaid creates edges with classes like 'flowchart-link'
+            Object.keys(nodeChildren).forEach(parentId => {
+                nodeChildren[parentId].forEach(childId => {
+                    const edge = findAndTagEdge(parentId, childId);
+                });
             });
 
-            // 2. Show initial nodes ('A' and 'B') and the connecting edge ('A' -> 'B')
+            // 3. Hide all edges initially
+            svg.querySelectorAll('path.edge-path, g.edgePath, path[data-edge]').forEach(edge => {
+                edge.style.visibility = 'hidden';
+            });
+
+            // 4. Show initial nodes ('A' and 'B') and the connecting edge ('A' -> 'B')
             const nodeA = findNodeElement('A');
             const nodeB = findNodeElement('B');
-            const edgeAB = findEdgeElement('A', 'B');
 
             if (nodeA) nodeA.classList.remove('hidden');
             if (nodeB) nodeB.classList.remove('hidden');
-            if (edgeAB) showEdge(edgeAB);
+
+            // Show edge A->B
+            showEdgeBetween('A', 'B');
 
             // Add click handlers that toggle children visibility in-place
             Object.keys(nodeChildren).forEach(nodeId => {
@@ -127,33 +138,78 @@
             return document.querySelector(`#mermaid-target svg g.node[id*='flowchart-${id}-']`) || document.querySelector(`#mermaid-target svg #${id}`);
         }
 
-        function findEdgeElement(from, to) {
+        // Find and tag an edge with data attributes for reliable tracking
+        function findAndTagEdge(from, to) {
             const svg = document.querySelector('#mermaid-target svg');
-            // Try several strategies to find the edge container or path elements.
-            // 1) A container with class 'edgePaths' or 'edgePath' and an id that includes the from-to
+
+            // Try several strategies to find the edge
             const selectors = [
-                `.edgePaths[id*='flowchart-${from}-${to}-']`,
-                `.edgePath[id*='flowchart-${from}-${to}-']`,
-                `g.edge[id*='${from}'][id*='${to}']`,
-                `path[id*='flowchart-${from}-${to}-']`,
-                `path[id*='${from}-${to}']`
+                `g.edgePath[id*='${from}'][id*='${to}']`,
+                `g.edgePath[id*='flowchart-${from}-${to}']`,
+                `path[id*='flowchart-${from}-${to}']`,
+                `path.flowchart-link[id*='${from}'][id*='${to}']`
             ];
 
             for (const sel of selectors) {
                 const el = svg.querySelector(sel);
-                if (el) return el;
+                if (el) {
+                    el.setAttribute('data-edge', `${from}-${to}`);
+                    el.setAttribute('data-from', from);
+                    el.setAttribute('data-to', to);
+                    return el;
+                }
             }
 
-            // As a last resort, try to find any path that visually connects nodes by looking for
-            // path elements that have marker-end (arrowheads) and are near the nodes. This is
-            // a broad fallback and may return null in complex diagrams.
+            // Fallback: search all paths
             const allPaths = Array.from(svg.querySelectorAll('path'));
             for (const p of allPaths) {
                 const id = p.getAttribute('id') || '';
-                if (id.includes(from) && id.includes(to)) return p;
+                if (id.includes(from) && id.includes(to)) {
+                    p.setAttribute('data-edge', `${from}-${to}`);
+                    p.setAttribute('data-from', from);
+                    p.setAttribute('data-to', to);
+                    return p;
+                }
             }
 
             return null;
+        }
+
+        // Show edge between two nodes
+        function showEdgeBetween(from, to) {
+            const svg = document.querySelector('#mermaid-target svg');
+
+            // Find by data attribute first
+            let edge = svg.querySelector(`[data-edge="${from}-${to}"]`);
+
+            // Fallback to finding and tagging
+            if (!edge) {
+                edge = findAndTagEdge(from, to);
+            }
+
+            if (edge) {
+                edge.style.visibility = 'visible';
+
+                // Also show parent edgePath group if exists
+                if (edge.closest('g.edgePath')) {
+                    edge.closest('g.edgePath').style.visibility = 'visible';
+                }
+            }
+        }
+
+        // Hide edge between two nodes
+        function hideEdgeBetween(from, to) {
+            const svg = document.querySelector('#mermaid-target svg');
+            const edge = svg.querySelector(`[data-edge="${from}-${to}"]`);
+
+            if (edge) {
+                edge.style.visibility = 'hidden';
+
+                // Also hide parent edgePath group if exists
+                if (edge.closest('g.edgePath')) {
+                    edge.closest('g.edgePath').style.visibility = 'hidden';
+                }
+            }
         }
 
         // Helper: is the element currently visible (not display:none, not visibility:hidden, and not .hidden)
@@ -167,37 +223,13 @@
             return true;
         }
 
-        function showEdge(edge) {
-            if (!edge) return;
-            try {
-                edge.style.display = '';
-                edge.classList.remove('hidden');
-                if (edge.tagName && edge.tagName.toLowerCase() === 'path' && edge.parentElement) {
-                    edge.parentElement.style.display = '';
-                    edge.parentElement.classList.remove('hidden');
-                }
-            } catch (e) {}
-        }
-
-        function hideEdge(edge) {
-            if (!edge) return;
-            try {
-                edge.style.display = 'none';
-                edge.classList.remove('hidden');
-                if (edge.tagName && edge.tagName.toLowerCase() === 'path' && edge.parentElement) {
-                    edge.parentElement.style.display = 'none';
-                }
-            } catch (e) {}
-        }
-
         // Recursively hide a node's subtree (used when collapsing a branch)
         function hideSubtree(parentId) {
             const children = nodeChildren[parentId] || [];
             children.forEach(childId => {
                 const childNode = findNodeElement(childId);
                 if (childNode) childNode.classList.add('hidden');
-                const edge = findEdgeElement(parentId, childId);
-                hideEdge(edge);
+                hideEdgeBetween(parentId, childId);
                 hideSubtree(childId);
             });
         }
@@ -208,11 +240,10 @@
                 nodeChildren[parentId].forEach(childId => {
                     const parentNode = findNodeElement(parentId);
                     const childNode = findNodeElement(childId);
-                    const edge = findEdgeElement(parentId, childId);
                     if (isElementVisible(parentNode) && isElementVisible(childNode)) {
-                        showEdge(edge);
+                        showEdgeBetween(parentId, childId);
                     } else {
-                        hideEdge(edge);
+                        hideEdgeBetween(parentId, childId);
                     }
                 });
             });
@@ -256,7 +287,6 @@
             if (!children) return;
             children.forEach(childId => {
                 const childNode = findNodeElement(childId);
-                const edge = findEdgeElement(parentId, childId);
 
                 if (!childNode) return;
 
@@ -264,13 +294,15 @@
                 if (currentlyVisible) {
                     // collapse: hide child and its subtree, hide connecting edge
                     childNode.classList.add('hidden');
-                    hideEdge(edge);
+                    hideEdgeBetween(parentId, childId);
                     hideSubtree(childId);
                 } else {
                     // expand: show child and show edge if parent is visible
                     childNode.classList.remove('hidden');
                     const parentNode = findNodeElement(parentId);
-                    if (isElementVisible(parentNode)) showEdge(edge);
+                    if (isElementVisible(parentNode)) {
+                        showEdgeBetween(parentId, childId);
+                    }
                 }
 
                 // Keep global edge visibility consistent
@@ -281,29 +313,23 @@
         function resetDiagram() {
             const svg = document.querySelector('#mermaid-target svg');
 
-            // Hide all nodes and edges
+            // Hide all nodes
             svg.querySelectorAll('g.node').forEach(node => node.classList.add('hidden'));
-            // Hide edges using inline styles for broader compatibility and remove any
-            // stray `.hidden` classes that could still affect visibility.
-            svg.querySelectorAll('.edgePaths, .edgePath, g.edge, path').forEach(edgeGroup => {
-                try { edgeGroup.style.display = 'none'; edgeGroup.classList.remove('hidden'); } catch (e) {}
+
+            // Hide all edges
+            svg.querySelectorAll('path.edge-path, g.edgePath, path[data-edge]').forEach(edge => {
+                edge.style.visibility = 'hidden';
             });
 
             // Show initial nodes ('A' and 'B') and connecting edge ('A' -> 'B')
             const nodeA = findNodeElement('A');
             const nodeB = findNodeElement('B');
-            const edgeAB = findEdgeElement('A', 'B');
 
             if (nodeA) nodeA.classList.remove('hidden');
             if (nodeB) nodeB.classList.remove('hidden');
-            if (edgeAB) {
-                edgeAB.classList.remove('hidden');
-                try { edgeAB.style.display = ''; } catch (e) {}
-                if (edgeAB.tagName.toLowerCase() === 'path' && edgeAB.parentElement) {
-                    edgeAB.parentElement.classList.remove('hidden');
-                    try { edgeAB.parentElement.style.display = ''; } catch (e) {}
-                }
-            }
+
+            // Show edge A->B
+            showEdgeBetween('A', 'B');
         }
     </script>
 
